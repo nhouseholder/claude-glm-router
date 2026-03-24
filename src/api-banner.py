@@ -1,73 +1,88 @@
 #!/usr/bin/env python3
-"""API routing banner — shows active backend on session start and every prompt.
-Queries the proxy for actual routing state, falls back to CLAUDE_MODEL env var."""
+"""API routing banner + GLM-5 reasoning scaffolding.
+
+🟠 = Anthropic (Opus/Sonnet), 🟢 = Z AI (GLM-5).
+
+On UserPromptSubmit:
+  - Always injects icon prefix instruction
+  - When Haiku/GLM-5: also injects reasoning scaffolding (replaces glm5-boost skill)
+  - When Opus/Sonnet: no scaffolding (native intelligence sufficient)
+
+On SessionStart:
+  - Shows API status banner with proxy health
+"""
 import json
 import sys
 import os
-import urllib.request
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from detect_model import detect_model
+
+# GLM-5 reasoning scaffolding — injected ONLY when Haiku is active.
+# This replaces the glm5-boost skill with zero-cost dynamic injection.
+GLM5_SCAFFOLDING = """
+[GLM-5 MODE] You have the same tools, skills, and memory as Opus. The session-bridge provides what Opus was working on. Follow this protocol:
+
+1. ORIENT — Read the handoff context. If continuing Opus's work, run `git diff --stat` to see what's already changed. Don't redo completed work.
+2. PLAN — State your approach in 1 line before acting.
+3. EXECUTE — Read files before editing. One change at a time. Use tools for facts, never generate from memory.
+4. VERIFY — Does this answer the question? Trace one example. Keep text under 40 lines.
+
+MULTI-FILE: Note the key fact from each file before reading the next.
+MATH/BETTING: profit = stake × (odds/100) for +odds, stake × (100/|odds|) for -odds. Losses = -1u. Never flat +1u. Trace one example.
+If uncertain, ask."""
+
+
 
 try:
     hook_input = json.load(sys.stdin)
     event = hook_input.get("hook_event_name", "")
 
-    # Determine model from the best available source
-    backend = None
-    model_name = None
+    model_lower = detect_model()
 
-    # Source 1: Query the proxy for actual last-routed model
-    try:
-        resp = urllib.request.urlopen("http://127.0.0.1:17532/last-route", timeout=1)
-        data = json.loads(resp.read())
-        ts = data.get("timestamp", 0)
-        # Only trust proxy data if it's recent (within last 5 minutes)
-        # On SessionStart there's no prior request, so timestamp will be 0 or stale
-        import time
-        if ts > 0 and (time.time() - ts) < 300:
-            backend = data.get("backend", "")
-            model_name = data.get("model", "")
-    except Exception:
-        pass
-
-    # Source 2: Fall back to CLAUDE_MODEL env var (always available)
-    if not backend:
-        model = os.environ.get("CLAUDE_MODEL", "")
-        if "haiku" in model.lower():
-            backend = "Z AI (GLM-5)"
-            model_name = model
-        elif "opus" in model.lower():
-            backend = "Anthropic"
-            model_name = model
-        elif "sonnet" in model.lower():
-            backend = "Anthropic"
-            model_name = model
-        else:
-            # Source 3: Check proxy health to confirm it's running
-            try:
-                resp = urllib.request.urlopen("http://127.0.0.1:17532/health", timeout=1)
-                health = json.loads(resp.read())
-                if health.get("status") == "ok":
-                    backend = "Anthropic"
-                    model_name = model or "unknown"
-                else:
-                    backend = "unknown"
-                    model_name = model or "unknown"
-            except Exception:
-                backend = "direct (proxy offline)"
-                model_name = model or "unknown"
-
-    # Build banner
-    if "Z AI" in backend or "GLM" in backend:
-        banner = "🟢 Z AI API ACTIVE (GLM-5) — Anthropic rate limits BYPASSED"
-    elif "Anthropic" in backend:
-        short = "Opus" if "opus" in model_name.lower() else "Sonnet" if "sonnet" in model_name.lower() else "Haiku" if "haiku" in model_name.lower() else model_name
-        banner = f"🔵 Anthropic API ACTIVE — Claude {short}"
-    elif "proxy offline" in backend:
-        banner = "⚠️ Proxy offline — requests going direct to Anthropic"
+    if "haiku" in model_lower:
+        icon = "🟢"
+        label = "GLM-5"
+        is_glm5 = True
+    elif "opus" in model_lower:
+        icon = "🟠"
+        label = "Opus"
+        is_glm5 = False
+    elif "sonnet" in model_lower:
+        icon = "🟠"
+        label = "Sonnet"
+        is_glm5 = False
     else:
-        banner = f"⚪ Model: {model_name}"
+        icon = "🟠"
+        label = "Claude"
+        is_glm5 = False
 
-    # On SessionStart, also show proxy status
-    if event == "SessionStart":
+    # UserPromptSubmit: only inject for GLM-5 (Haiku). Opus/Sonnet don't need scaffolding.
+    if event == "UserPromptSubmit":
+        if is_glm5:
+            context = f'Place exactly "{icon}" as the very first character of your FIRST message only. Do NOT repeat the emoji mid-response, after tool calls, or when subagent results return. One emoji total, at the very start. You are running on {label}.'
+            context += GLM5_SCAFFOLDING
+            print(json.dumps({
+                "hookSpecificOutput": {
+                    "hookEventName": "UserPromptSubmit",
+                    "additionalContext": context
+                }
+            }))
+        else:
+            # Opus/Sonnet: emit minimal icon instruction only — no scaffolding overhead
+            print(json.dumps({
+                "hookSpecificOutput": {
+                    "hookEventName": "UserPromptSubmit",
+                    "additionalContext": f'Begin your response with exactly "{icon}" (the single emoji, nothing else before it). This indicates you are running on {label}.'
+                }
+            }))
+
+    # SessionStart: show info banner with proxy status
+    elif event == "SessionStart":
+        if is_glm5:
+            banner = f"{icon} Z AI API ACTIVE (GLM-5) — Anthropic limits bypassed"
+        else:
+            banner = f"{icon} Anthropic API ACTIVE — Claude {label}"
         try:
             resp = urllib.request.urlopen("http://127.0.0.1:17532/health", timeout=1)
             health = json.loads(resp.read())
@@ -77,9 +92,20 @@ try:
             uptime_str = f"{h}h{m}m" if h else f"{m}m"
             banner += f"  |  Proxy v{v} up {uptime_str}"
         except Exception:
-            banner += "  |  ⚠️ Proxy not running"
+            banner += "  |  Proxy not running"
 
-    print(json.dumps({"type": "info", "message": banner}))
+        # For GLM-5 sessions, also inject scaffolding at session level
+        if is_glm5:
+            print(json.dumps({
+                "hookSpecificOutput": {
+                    "hookEventName": "SessionStart",
+                    "additionalContext": GLM5_SCAFFOLDING
+                }
+            }))
+        print(json.dumps({"type": "info", "message": banner}))
+
+    else:
+        print(json.dumps({"type": "info", "message": f"{icon} {label}"}))
 
 except Exception:
     pass
