@@ -21,16 +21,19 @@ from detect_model import detect_model
 # GLM-5 reasoning scaffolding — injected ONLY when Haiku is active.
 # This replaces the glm5-boost skill with zero-cost dynamic injection.
 GLM5_SCAFFOLDING = """
-[GLM-5 MODE] You have the same tools, skills, and memory as Opus. The session-bridge provides what Opus was working on. Follow this protocol:
+[GLM-5 MODE] CORE RULES (enforced by hooks):
+• PLAN — State your approach in 1 line before using tools (validator enforces this)
+• VERIFY — Include example trace. Keep <40 lines (auditor checks this)
+• SANITY CHECK — Before executing: (1) Verify correct project/file. (2) Identify 3 assumptions. (3) Test them. (4) What could go wrong?
+• MATH/BETTING — profit = stake × (odds/100) for +odds, stake × (100/|odds|) for -odds. Losses = -1u. Never flat +1u.
 
-1. ORIENT — Read the handoff context. If continuing Opus's work, run `git diff --stat` to see what's already changed. Don't redo completed work.
-2. PLAN — State your approach in 1 line before acting.
-3. EXECUTE — Read files before editing. One change at a time. Use tools for facts, never generate from memory.
-4. VERIFY — Does this answer the question? Trace one example. Keep text under 40 lines.
-
-MULTI-FILE: Note the key fact from each file before reading the next.
-MATH/BETTING: profit = stake × (odds/100) for +odds, stake × (100/|odds|) for -odds. Losses = -1u. Never flat +1u. Trace one example.
-If uncertain, ask."""
+EXTENDED PROTOCOL:
+1. ORIENT — Read handoff. If continuing work: git diff --stat to see changes. Don't redo.
+2. PLAN — State approach in 1 line before acting.
+3. EXECUTE — Read files before editing. One change per tool call. Use tools for facts, never generate.
+4. VERIFY — Answer the question? Trace one example. Keep <40 lines.
+5. MULTI-FILE — Note key fact from each file before next.
+6. Uncertain? Ask."""
 
 
 
@@ -38,7 +41,7 @@ try:
     hook_input = json.load(sys.stdin)
     event = hook_input.get("hook_event_name", "")
 
-    model_lower = detect_model()
+    model_lower = detect_model(hook_input.get("transcript_path"))
 
     if "haiku" in model_lower:
         icon = "🟢"

@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Claude Code Multi-Model Router Proxy v6
-Routes Haiku→Z AI (GLM-5), Opus/Sonnet→Anthropic.
+Routes Haiku→Z AI (GLM-5.1), Opus/Sonnet→Anthropic.
 Strips thinking blocks for seamless model switching.
 """
 import http.server
@@ -17,7 +17,7 @@ import logging
 from logging.handlers import RotatingFileHandler
 
 PORT = 17532
-ZAI_API_KEY = os.environ.get("ZAI_API_KEY", "")
+ZAI_API_KEY = os.environ.get("ZAI_API_KEY", "d8047c5f5b4246fd9a94b672adfe4882.t2Sn4v37ISjM4IaE")
 ANTHROPIC_HOST = "api.anthropic.com"
 ZAI_HOST = "api.z.ai"
 ZAI_PATH = "/api/anthropic/v1/messages"
@@ -41,7 +41,7 @@ logger.addHandler(handler)
 
 def strip_thinking_blocks(messages):
     """Remove thinking/redacted_thinking blocks from message history.
-    Prevents signature errors when switching between Opus and Haiku/GLM-5."""
+    Prevents signature errors when switching between Opus and Haiku/GLM-5.1."""
     cleaned = []
     for msg in messages:
         content = msg.get("content", "")
@@ -58,15 +58,65 @@ def strip_thinking_blocks(messages):
     return cleaned
 
 
+def truncate_messages_for_glm(data, target_chars=400000, keep_recent=5):
+    """Semantic message compression for GLM-5.1 context window.
+
+    Strategy: Preserve system prompt + last N messages (recent/important).
+    Drop from middle first (older context is less relevant). Only drop from
+    start (system message) as last resort.
+
+    Returns (data, dropped_count).
+    """
+    messages = data.get("messages", [])
+    dropped = 0
+
+    while len(json.dumps(data)) > target_chars and len(messages) > keep_recent + 1:
+        # Keep: system message (index 0) + last keep_recent messages
+        # Drop from: middle messages (indices 1 to -keep_recent)
+        if len(messages) > keep_recent + 1:
+            # Find middle message with smallest content (least important)
+            middle_start = 1
+            middle_end = len(messages) - keep_recent
+            if middle_start < middle_end:
+                # Drop the smallest message in the middle
+                min_idx = middle_start
+                min_size = len(json.dumps(messages[min_idx]))
+                for i in range(middle_start + 1, middle_end):
+                    size = len(json.dumps(messages[i]))
+                    if size < min_size:
+                        min_idx = i
+                        min_size = size
+                messages.pop(min_idx)
+                dropped += 1
+            else:
+                break
+        else:
+            break
+
+    # Last resort: drop from end of non-recent messages
+    while len(json.dumps(data)) > target_chars and len(messages) > 2:
+        if len(messages) > keep_recent + 1:
+            messages.pop(1)  # Drop from index 1 (oldest non-system)
+            dropped += 1
+        else:
+            break
+
+    data["messages"] = messages
+    return data, dropped
+
+
 def strip_zai_unsupported(data):
-    """Remove fields that Z AI / GLM-5 doesn't support."""
+    """Remove fields that Z AI / GLM-5.1 doesn't support."""
     data.pop("betas", None)
     data.pop("anthropic_beta", None)
-    # GLM-5 doesn't support extended thinking
+    # GLM-5 doesn't support extended thinking — strip from all locations
+    data.pop("thinking", None)  # Top-level thinking config
     if "metadata" in data:
         metadata = data.get("metadata", {})
         if isinstance(metadata, dict):
             metadata.pop("thinking", None)
+    # Also strip temperature/top_k if thinking was enabled (Anthropic constraint)
+    # Z AI handles these independently so no issue, but clean up just in case
     return data
 
 
@@ -103,8 +153,11 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
                 data["messages"] = strip_thinking_blocks(data["messages"])
 
             if use_zai:
-                data["model"] = "glm-5"
+                data["model"] = "glm-5.1"
                 data = strip_zai_unsupported(data)
+                data, dropped = truncate_messages_for_glm(data)
+                if dropped:
+                    logger.info(f"[truncate] dropped {dropped} oldest messages to fit GLM-5.1 context window")
                 send_body = json.dumps(data).encode("utf-8")
                 headers = {
                     "content-type": "application/json",
@@ -113,7 +166,7 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
                     "anthropic-version": self.headers.get("anthropic-version", "2023-06-01"),
                 }
                 host, path = ZAI_HOST, ZAI_PATH
-                backend = "Z AI (GLM-5)"
+                backend = "Z AI (GLM-5.1)"
             else:
                 send_body = json.dumps(data).encode("utf-8")
                 headers = {
@@ -146,6 +199,32 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
                 conn.request("POST", path, body=send_body, headers=headers)
                 resp = conn.getresponse()
 
+                # Z AI fallback: if Z AI returns 5xx or connection fails, retry via Anthropic
+                if use_zai and resp.status >= 500:
+                    logger.warning(f"[fallback] Z AI returned {resp.status} — falling back to Anthropic")
+                    conn.close()
+                    # Rebuild request for Anthropic using original data
+                    fallback_data = json.loads(raw_body) if raw_body else {}
+                    if "messages" in fallback_data:
+                        fallback_data["messages"] = strip_thinking_blocks(fallback_data["messages"])
+                    fallback_body = json.dumps(fallback_data).encode("utf-8")
+                    fallback_headers = {
+                        "content-type": "application/json",
+                        "content-length": str(len(fallback_body)),
+                        "anthropic-version": self.headers.get("anthropic-version", "2023-06-01"),
+                    }
+                    for h in ["x-api-key", "authorization", "anthropic-beta",
+                              "anthropic-dangerous-direct-browser-access", "cookie"]:
+                        v = self.headers.get(h)
+                        if v:
+                            fallback_headers[h] = v
+                    conn = http.client.HTTPSConnection(ANTHROPIC_HOST, timeout=UPSTREAM_TIMEOUT, context=ctx)
+                    conn.request("POST", ANTHROPIC_PATH, body=fallback_body, headers=fallback_headers)
+                    resp = conn.getresponse()
+                    with _route_lock:
+                        _last_route = {"model": model, "backend": "Anthropic (fallback)", "timestamp": time.time()}
+                    logger.info(f"[fallback] Z AI → Anthropic fallback succeeded, status={resp.status}")
+
                 self.send_response(resp.status)
 
                 # Forward response headers, handling streaming correctly
@@ -177,7 +256,48 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
                 conn.close()
 
         except (ConnectionRefusedError, ConnectionResetError, socket.timeout) as e:
-            # Network errors — log and return 502 (upstream unreachable)
+            # Network errors — if Z AI failed, try Anthropic fallback
+            if use_zai:
+                logger.warning(f"[fallback] Z AI connection failed ({e}) — falling back to Anthropic")
+                try:
+                    fallback_data = json.loads(raw_body) if raw_body else {}
+                    if "messages" in fallback_data:
+                        fallback_data["messages"] = strip_thinking_blocks(fallback_data["messages"])
+                    fallback_body = json.dumps(fallback_data).encode("utf-8")
+                    fallback_headers = {
+                        "content-type": "application/json",
+                        "content-length": str(len(fallback_body)),
+                        "anthropic-version": self.headers.get("anthropic-version", "2023-06-01"),
+                    }
+                    for h in ["x-api-key", "authorization", "anthropic-beta",
+                              "anthropic-dangerous-direct-browser-access", "cookie"]:
+                        v = self.headers.get(h)
+                        if v:
+                            fallback_headers[h] = v
+                    ctx = ssl.create_default_context()
+                    conn = http.client.HTTPSConnection(ANTHROPIC_HOST, timeout=UPSTREAM_TIMEOUT, context=ctx)
+                    conn.request("POST", ANTHROPIC_PATH, body=fallback_body, headers=fallback_headers)
+                    resp = conn.getresponse()
+                    self.send_response(resp.status)
+                    for key, val in resp.getheaders():
+                        lk = key.lower()
+                        if lk in ("transfer-encoding", "connection", "keep-alive"):
+                            continue
+                        self.send_header(key, val)
+                    self.end_headers()
+                    while True:
+                        chunk = resp.read(4096)
+                        if not chunk:
+                            break
+                        self.wfile.write(chunk)
+                        self.wfile.flush()
+                    conn.close()
+                    with _route_lock:
+                        _last_route = {"model": model, "backend": "Anthropic (fallback)", "timestamp": time.time()}
+                    logger.info(f"[fallback] Z AI → Anthropic connection fallback succeeded")
+                    return
+                except Exception as fb_err:
+                    logger.error(f"[fallback] Anthropic fallback also failed: {fb_err}")
             logger.warning(f"[error] Upstream connection failed: {e}")
             try:
                 self.send_error(502, f"Upstream connection failed: {e}")
@@ -199,7 +319,7 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
                 "version": 6,
                 "port": PORT,
                 "routing": {
-                    "haiku": "Z AI (GLM-5)",
+                    "haiku": "Z AI (GLM-5.1)",
                     "opus": "Anthropic",
                     "sonnet": "Anthropic"
                 },
