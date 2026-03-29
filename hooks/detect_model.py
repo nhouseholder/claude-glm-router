@@ -5,34 +5,20 @@ import urllib.request
 
 
 def detect_model(transcript_path=None):
-    """Detect current model. Smart detection handles model switches mid-session.
-    Priority: CLAUDE_MODEL env var → settings.json (authoritative) → transcript (fallback) → 'opus'.
+    """Detect current model. Prioritizes transcript (actual usage) over settings (stale on mid-session switches).
+    Priority: CLAUDE_MODEL env var → transcript (recent) → settings.json (fallback) → 'opus'.
     """
     # 1. Env var (set by some Claude Code versions)
     model = os.environ.get("CLAUDE_MODEL", "")
     if model:
         return model.lower()
 
-    # 2. settings.json (authoritative — updated by /model command, reflects startup model)
-    settings_model = None
-    try:
-        settings_path = os.path.expanduser("~/.claude/settings.json")
-        with open(settings_path) as f:
-            settings = json.load(f)
-        settings_model = settings.get("model", "").lower()
-        if settings_model:
-            # If settings shows haiku/sonnet/opus, trust it (user just switched)
-            if any(x in settings_model for x in ["haiku", "sonnet", "opus"]):
-                return settings_model
-    except Exception:
-        pass
-
-    # 3. Transcript — last assistant message (one-turn stale but usually correct)
+    # 2. Transcript — FIRST if it has content (reflects actual last model used, catches mid-session switches)
     if transcript_path:
         try:
             with open(transcript_path) as f:
                 lines = f.readlines()
-            if lines:  # Only trust transcript if it has content
+            if lines:  # If transcript has content, trust it over settings.json
                 for line in reversed(lines):
                     entry = json.loads(line)
                     msg = entry.get("message", {})
@@ -41,11 +27,18 @@ def detect_model(transcript_path=None):
         except Exception:
             pass
 
-    # 4. Fallback to settings.json if no transcript
-    if settings_model:
-        return settings_model
+    # 3. settings.json — only if transcript is empty/new session
+    try:
+        settings_path = os.path.expanduser("~/.claude/settings.json")
+        with open(settings_path) as f:
+            settings = json.load(f)
+        model = settings.get("model", "").lower()
+        if model:
+            return model
+    except Exception:
+        pass
 
-    # 5. Unknown = assume Anthropic (safe default).
+    # 4. Unknown = assume Anthropic (safe default).
     return "opus"
 
 
