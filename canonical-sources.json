@@ -1,0 +1,149 @@
+{
+  "metadata": {
+    "description": "Canonical sources for real AI models. Source of truth for hallucination prevention.",
+    "last_updated": "2026-03-29",
+    "note": "If a model is not in this list, it does not exist. Do not invent."
+  },
+  "real_models": {
+    "anthropic": {
+      "models": [
+        "Claude Opus 4.6",
+        "Claude Sonnet 4.6",
+        "Claude Haiku 4.5"
+      ],
+      "sources": [
+        "https://anthropic.com/models",
+        "https://docs.anthropic.com/en/docs/about-claude/models/overview"
+      ],
+      "version_pattern": "\\d+\\.\\d+(\\.\\d+)?",
+      "next_expected": "Claude 5.0 (Q3 2026)",
+      "notes": "No intermediate versions. Haiku < Sonnet < Opus in capability."
+    },
+    "openai": {
+      "models": [
+        "GPT-4o",
+        "GPT-4o mini",
+        "GPT-4 Turbo",
+        "GPT-3.5 Turbo"
+      ],
+      "sources": [
+        "https://platform.openai.com/docs/models",
+        "https://openai.com/api/pricing"
+      ],
+      "version_pattern": "gpt-\\d+[a-z]*(-turbo|-mini)?",
+      "next_expected": "GPT-5 (TBD)",
+      "notes": "No GPT-5, GPT-6, etc. yet. Do not invent."
+    },
+    "google": {
+      "models": [
+        "Gemini 2.0 Flash",
+        "Gemini 2.0 Pro",
+        "Gemini 1.5 Pro",
+        "Gemini 1.5 Flash"
+      ],
+      "sources": [
+        "https://ai.google.dev/models",
+        "https://cloud.google.com/vertex-ai/generative-ai/docs/learn/models"
+      ],
+      "version_pattern": "Gemini \\d+(\\.\\d+)?",
+      "next_expected": "Gemini 2.5 (2026+)",
+      "notes": "2.0 released 2024. No 3.0, 3.2, etc."
+    },
+    "z-ai": {
+      "models": [
+        "GLM-5.1",
+        "GLM-5",
+        "GLM-4"
+      ],
+      "sources": [
+        "https://z-ai-api.internal/models",
+        "Internal Z AI documentation"
+      ],
+      "version_pattern": "GLM-\\d+(\\.\\d+)?",
+      "next_expected": "GLM-6 (TBD)",
+      "notes": "GLM-5.1 just released. This is the routing target for claude-glm-router."
+    },
+    "meta": {
+      "models": [
+        "Llama 3.3 70B",
+        "Llama 3.1 405B",
+        "Llama 3 70B"
+      ],
+      "sources": [
+        "https://llama.meta.com/models",
+        "https://huggingface.co/meta-llama"
+      ],
+      "version_pattern": "Llama \\d+(\\.\\d+)?",
+      "next_expected": "Llama 4 (2025+)",
+      "notes": "Open source. Latest is 3.3."
+    },
+    "deepseek": {
+      "models": [
+        "DeepSeek V3",
+        "DeepSeek V2.5"
+      ],
+      "sources": [
+        "https://www.deepseek.com",
+        "https://api-docs.deepseek.com/models"
+      ],
+      "version_pattern": "DeepSeek V\\d+(\\.\\d+)?",
+      "next_expected": "DeepSeek V4 (TBD)",
+      "notes": "DO NOT invent V4 — only V3 and earlier exist."
+    },
+    "mistral": {
+      "models": [
+        "Mistral Large 2",
+        "Mistral Medium",
+        "Mistral Small"
+      ],
+      "sources": [
+        "https://docs.mistral.ai/capabilities/function_calling",
+        "https://mistral.ai/technology"
+      ],
+      "version_pattern": "Mistral (Large|Medium|Small|Tiny)(\\s\\d+)?",
+      "next_expected": "Unclear",
+      "notes": "European LLM. Multiple size variants."
+    }
+  },
+  "false_models": {
+    "Claude 4.6": "FABRICATED. Latest Claude is 4.5. No 4.6 released.",
+    "Claude 5.0": "UNRELEASED. Expected Q3 2026. Do not include as real.",
+    "Claude 6.0": "DOES NOT EXIST.",
+    "Gemini 3.0": "FABRICATED. Gemini 2.0 is the latest. No 3.0 released.",
+    "Gemini 3.2 Pro": "FABRICATED. This version does not exist.",
+    "DeepSeek V4": "FABRICATED. Latest is V3. Do not invent V4.",
+    "GPT-5": "UNRELEASED. Do not include as real.",
+    "GPT-6": "DOES NOT EXIST.",
+    "GLM-6": "UNRELEASED. Only GLM-5.1, GLM-5, GLM-4 are real.",
+    "Llama 4": "UNRELEASED. Latest is Llama 3.3."
+  },
+  "pricing_ranges": {
+    "description": "Sanity bounds for AI model pricing (per 1M tokens)",
+    "input_price": {
+      "min": 0.00001,
+      "max": 100,
+      "unit": "USD"
+    },
+    "output_price": {
+      "min": 0.00001,
+      "max": 100,
+      "unit": "USD",
+      "rule": "MUST be >= input_price"
+    }
+  },
+  "context_windows": {
+    "description": "Sanity bounds for context window sizes",
+    "min": 4000,
+    "max": 2000000,
+    "unit": "tokens",
+    "note": "Typical: 4K-200K. Opus/GLM-5.1: 200K-1M. Nobody has >2M yet."
+  },
+  "validation_rules": {
+    "rule_1": "If a model is not in 'real_models', it does not exist. Do not invent.",
+    "rule_2": "If a model is in 'false_models', reject it immediately with reason.",
+    "rule_3": "Pricing must satisfy: output_price >= input_price AND both in range.",
+    "rule_4": "Context window must be between 4K-2M tokens.",
+    "rule_5": "When uncertain: ask user or cite source. Never guess.",
+    "rule_6": "If web scraping finds <5 models from major brands, do NOT invent the others."
+  }
+}
