@@ -1,0 +1,177 @@
+{
+  "hypothesis_testing_template": {
+    "description": "Use this template for every algorithm hypothesis test. Fill out ALL fields before running backtest.",
+
+    "PHASE_1_PreTest": {
+      "hypothesis_statement": {
+        "required": true,
+        "example": "Skip DEC when opponent has low striking defense (<45%) AND high SApM (>4.0)",
+        "validation": "Must be specific and testable. No vague statements."
+      },
+
+      "mechanism": {
+        "required": true,
+        "example": "Low StrDef + high SApM = opponent gets beaten up = unlikely to go distance = DEC unlikely to cash",
+        "validation": "Must explain why this should improve ROI, not just what changes."
+      },
+
+      "expected_impact": {
+        "required": true,
+        "example": "+3-5u (medium confidence)",
+        "validation": "Quantified prediction with confidence level. No 'should help' or 'might work'."
+      },
+
+      "sample_validation_fights": {
+        "required": true,
+        "count_minimum": 3,
+        "example": [
+          {
+            "event": "UFC 300",
+            "fighter_a": "Red corner fighter (gate parameters)",
+            "fighter_b": "Blue corner fighter",
+            "gate_trigger": true,
+            "current_prediction": "DEC (+150)",
+            "with_hypothesis": "KO (+280)",
+            "actual_result": "DEC won",
+            "gate_judgment": "Gate would have cost 150u, doesn't make sense"
+          }
+        ],
+        "validation": "Must show 3-5 recent fights where hypothesis applies. Evaluate if gate makes intuitive sense for each."
+      },
+
+      "pass_threshold": {
+        "required": true,
+        "example": "+1.5u combined minimum",
+        "validation": "Specific number. Test either passes or fails this threshold, no ambiguity."
+      },
+
+      "fail_threshold": {
+        "required": true,
+        "example": "-5.0u combined = auto-revert",
+        "validation": "Revert decision point. If loss exceeds this, revert immediately without investigation."
+      },
+
+      "phase_1_status": "✓ READY TO TEST or ❌ ISSUES FOUND"
+    },
+
+    "PHASE_2_Execution": {
+      "backtest_command": "UFC_BACKTEST_MODE=1 UFC_CACHE_ONLY=1 python3 UFC_Alg_v4_fast_2026.py",
+      "run_in_background": true,
+      "wait_time_minutes": 5,
+      "status_checks_allowed": 1,
+      "narration_prohibited": true
+    },
+
+    "PHASE_3_Results": {
+      "baseline_pl": {
+        "required": true,
+        "example": "+285.25u",
+        "source": "v11.17 from algorithm_stats.json"
+      },
+
+      "test_pl": {
+        "required": true,
+        "example": "+285.25u",
+        "source": "v11.18 from algorithm_stats.json"
+      },
+
+      "delta": {
+        "required": true,
+        "calculation": "test_pl - baseline_pl",
+        "example": "+0.00u"
+      },
+
+      "per_stream_breakdown": {
+        "required": true,
+        "fields": ["ml_delta", "method_delta", "combo_delta", "parlay_delta"],
+        "example": "ML +1.10u, Method +0.00u, Combo +2.75u, Parlay -10.76u"
+      },
+
+      "pass_fail_decision": {
+        "options": ["✓ PASS", "❌ FAIL", "❓ INVESTIGATE"],
+        "determination": "Does delta meet pass_threshold?"
+      }
+    },
+
+    "PHASE_4_RootCauseAnalysis": {
+      "required_if": "FAIL or INVESTIGATE",
+      "required_if_not": "N/A",
+
+      "root_cause": {
+        "required": true,
+        "example": "Parlay P/L disappeared entirely. Gate may have affected parlay leg selection. Opponent durability stats don't reliably predict method outcomes.",
+        "validation": "Hypothesis for why test failed. Not just 'it didn't improve ROI'."
+      },
+
+      "top_affected_fights": {
+        "required": true,
+        "count_minimum": 3,
+        "example": [
+          {
+            "fighter": "Fighter X (StrDef 42%, SApM 4.1)",
+            "opponent": "Fighter Y",
+            "gate_action": "Skipped DEC (+150)",
+            "current_prediction": "KO (+280)",
+            "actual_result": "DEC won",
+            "impact": "Cost +150u"
+          }
+        ],
+        "validation": "Show specific fights where gate fired and what it cost/gained."
+      },
+
+      "learnings": {
+        "required": true,
+        "example": "Opponent stats alone insufficient; need to weight against head movement, chin, loss_pct for better signal",
+        "validation": "What did we learn that prevents re-testing this approach?"
+      }
+    },
+
+    "PHASE_5_Decision": {
+      "decision_options": [
+        {
+          "decision": "✓ PASS",
+          "action": "Commit to main, increment version, update ALGORITHM_VERSIONING.md"
+        },
+        {
+          "decision": "❌ FAIL",
+          "action": "Revert, log failure reason, archive to candidate list"
+        },
+        {
+          "decision": "❓ INVESTIGATE",
+          "action": "Adjust parameters and re-test OR revert and mark for future research"
+        }
+      ]
+    },
+
+    "LOGGING": {
+      "destination": "~/.mmalogic/backtest_runs/EXPERIMENT_LOG.md",
+      "required_sections": [
+        "Hypothesis",
+        "Expected",
+        "Mechanism",
+        "Results (table format)",
+        "Root Cause (if FAIL/INVESTIGATE)",
+        "Top affected fights (if FAIL/INVESTIGATE)",
+        "Decision"
+      ],
+      "example_entry": "See glm5-hypothesis-testing-protocol.md Phase 4 section"
+    },
+
+    "TOKEN_EFFICIENCY": {
+      "per_hypothesis_budget": "1000-1500 tokens",
+      "breakdown": {
+        "phase_1": "300-400 tokens",
+        "phase_2": "50 tokens (background run, 1 status check)",
+        "phase_3": "200-300 tokens (results + decision)",
+        "phase_4": "400-500 tokens (root cause + logging)",
+        "phase_5": "50 tokens (clear next steps)"
+      },
+      "prohibitions": [
+        "No narration ('Let me check', 'Let me wait')",
+        "No polling loops (1 status check only)",
+        "No auto-pivots to other work",
+        "No process description (focus on results)"
+      ]
+    }
+  }
+}
